@@ -1,0 +1,23 @@
+{
+  "name": "Vibersmoon Beta",
+  "version": "1.0",
+  "description": "Vibersmoon",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "test": "node scripts/test-all.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "boxen": "^5.1.2",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.4.5",
+    "figlet": "^1.11.4",
+    "nodemon": "^3.1.14",
+    "telegraf": "^4.16.3",
+    "yt-search": "^2.13.1"
+  }
+}
