@@ -4,6 +4,18 @@
  * - axios.get/post di-route ke respons palsu (cuaca, file, tikwm, AI)
  * - data/db.json dibackup & direstore oleh runner eksternal
  */
+// Agar test bisa berjalan di CI tanpa file .env (mis. GitHub Actions),
+// isi variabel yang belum ada dengan nilai dummy. dotenv tidak akan
+// menimpa nilai yang sudah ada, jadi .env lokal tetap diprioritaskan.
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
+process.env.BOT_TOKEN ||= 'test-bot-token';
+process.env.ADMIN_IDS ||= '111111111';
+process.env.WEATHER_API_KEY ||= 'test-weather-key';
+process.env.AI_BASE_URL ||= 'https://ai.mock/v1';
+process.env.AI_API_KEY ||= 'test-ai-key';
+process.env.AI_MODEL ||= 'gpt-test';
+process.env.AI_VISION_MODEL ||= 'vision-test';
+
 const axios = require('axios');
 const config = require('../src/config');
 const { createBot } = require('../src/bot');
