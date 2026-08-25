@@ -182,4 +182,4 @@ Fork → branch baru (`feat/fiturkeren`) → commit → Pull Request. Untuk mena
 
 ## 📜 Lisensi
 
-MIT — bebas dipakai dan dimodifikasi.
+MIT — JANGAN HAPUS CREDIT DEVELOPER.
