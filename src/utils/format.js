@@ -1,130 +1,80 @@
-function escapeHtml(s) {
-  return s
+export function escapeHtml(s) {
+  return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
-function extractParts(text) {
+export function truncate(text, max = 100) {
+  return String(text).slice(0, max);
+}
+
+export function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`;
+}
+
+export function isUrl(str) {
+  try { new URL(str); return true; } catch { return false; }
+}
+
+// Ubah output AI (markdown sederhana) jadi HTML aman untuk Telegram.
+export function toTelegramHtml(text) {
+  let s = escapeHtml(String(text));
+
+  // Fenced code block: ```lang\n...\n```
   const parts = [];
-  const re = /```(\w+)?\n?/g;
-  let last = 0;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const openIdx = m.index;
-    const openLen = m[0].length;
-    const lang = m[1] || '';
-    const closeIdx = text.indexOf('```', openIdx + openLen);
-    if (openIdx > last) parts.push({ type: 'text', content: text.slice(last, openIdx) });
-    if (closeIdx === -1) {
-      // fence tidak ditutup -> sisa sampai akhir dianggap code
-      parts.push({ type: 'code', lang, content: text.slice(openIdx + openLen) });
-      last = text.length;
-      break;
-    }
-    const code = text
-      .slice(openIdx + openLen, closeIdx)
-      .replace(/^\n/, '')
-      .replace(/\n$/, '');
-    parts.push({ type: 'code', lang, content: code });
-    last = closeIdx + 3;
-    re.lastIndex = closeIdx + 3;
+  const re = /```(\w*)\n([\s\S]*?)```/g;
+  let last = 0, m;
+  while ((m = re.exec(s)) !== null) {
+    parts.push(s.slice(last, m.index));
+    const lang = m[1] ? ` class="language-${m[1]}"` : '';
+    parts.push(`<pre><code${lang}>${m[2]}</code></pre>`);
+    last = re.lastIndex;
   }
-  if (last < text.length) parts.push({ type: 'text', content: text.slice(last) });
-  return parts;
+  parts.push(s.slice(last));
+  s = parts.join('');
+
+  // Inline code: `x`
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  // Bold: **x** atau __x__
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  s = s.replace(/__([^_\n]+)__/g, '<b>$1</b>');
+  // Italic: *x* (hati-hati jangan tabrak bold yang sudah jadi)
+  s = s.replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,!?])/g, '$1<i>$2</i>');
+  return s;
 }
 
-function toTelegramHtml(text) {
-  return extractParts(text)
-    .map((p) =>
-      p.type === 'text'
-        ? escapeHtml(p.content)
-        : `<pre><code>${escapeHtml(p.content)}</code></pre>`
-    )
-    .join('');
-}
-
-const LANG_EXT = {
-  // JavaScript / TypeScript
-  js: 'js', javascript: 'js', jsx: 'jsx', ts: 'ts', typescript: 'ts', tsx: 'tsx',
-  mjs: 'mjs', cjs: 'cjs', vue: 'vue', svelte: 'svelte',
-  // Python
-  py: 'py', python: 'py', py3: 'py', ipynb: 'ipynb',
-  // JVM
-  java: 'java', kt: 'kt', kotlin: 'kt', scala: 'scala', groovy: 'groovy',
-  // C / C++
-  c: 'c', h: 'h', cpp: 'cpp', 'c++': 'cpp', cc: 'cc', cxx: 'cxx', hpp: 'hpp',
-  hxx: 'hxx', cu: 'cu', cuh: 'cuh',
-  // C# / .NET
-  cs: 'cs', csharp: 'cs', vb: 'vb', vbnet: 'vb',
-  // Web
-  php: 'php', rb: 'rb', ruby: 'rb', go: 'go', golang: 'go', rs: 'rs', rust: 'rs',
-  // Lainnya
-  swift: 'swift', dart: 'dart', r: 'r', perl: 'pl', pl: 'pl', lua: 'lua',
-  pas: 'pas', pascal: 'pas', sql: 'sql',
-  // Shell / scripting
-  sh: 'sh', bash: 'sh', shell: 'sh', zsh: 'zsh', fish: 'fish',
-  ps1: 'ps1', powershell: 'ps1', bat: 'bat', cmd: 'bat',
-  // Markup / data
-  html: 'html', htm: 'htm', css: 'css', scss: 'scss', sass: 'sass', less: 'less',
-  json: 'json', xml: 'xml', yaml: 'yaml', yml: 'yml', toml: 'toml', ini: 'ini',
-  csv: 'csv', tsv: 'tsv', env: 'env',
-  // Dokumen / lainnya
-  md: 'md', markdown: 'md', tex: 'tex', latex: 'tex',
-  dockerfile: 'dockerfile', makefile: 'makefile', graphql: 'graphql', gql: 'graphql',
-  proto: 'proto', tcl: 'tcl', asm: 'asm', nasm: 'asm', haskell: 'hs', hs: 'hs',
-  elixir: 'ex', ex: 'ex', exs: 'exs', erlang: 'erl', erl: 'erl', clj: 'clj',
-  lisp: 'lisp', elm: 'elm', cobol: 'cbl', fortran: 'f90', f90: 'f90',
-  // default teks
-  txt: 'txt', text: 'txt',
-};
-
-function langToExt(lang) {
-  if (!lang) return 'txt';
-  return LANG_EXT[lang.toLowerCase()] || 'txt';
-}
-
-// Ambang panjang code (karakter). Di bawah ini -> code block HTML,
-// di atas ini -> dikirim sebagai file dokumen.
-const MAX_INLINE_CODE = 1500;
-
-function parseParts(text) {
-  return extractParts(text);
-}
-
-function splitHtml(html) {
-  const MAX = 4000;
-  if (html.length <= MAX) return [html];
-
+// Pecah HTML Telegram jadi chunk aman (<4096 char), jangan potong di tengah tag.
+export function splitHtml(html, chunk = 3900) {
+  if (html.length <= chunk) return [html];
+  const openTags = [];
   const chunks = [];
-  let buf = '';
-  let inPre = false;
-  let i = 0;
-  while (i < html.length) {
-    if (html.startsWith('<pre><code>', i)) {
-      buf += '<pre><code>';
-      i += '<pre><code>'.length;
-      inPre = true;
-      continue;
+  let cur = '';
+  // tokenisasi tag vs teks
+  const tokens = html.split(/(<[^>]+>)/g).filter(Boolean);
+  for (const tok of tokens) {
+    if (cur.length + tok.length > chunk && cur.length > 0) {
+      // tutup tag yang masih terbuka di akhir chunk ini
+      chunks.push(cur + openTags.slice().reverse().map((t) => `</${t}>`).join(''));
+      // buka lagi tag aktif di chunk berikutnya
+      cur = openTags.map((t) => `<${t}>`).join('');
     }
-    if (html.startsWith('</code></pre>', i)) {
-      buf += '</code></pre>';
-      i += '</code></pre>'.length;
-      inPre = false;
-      continue;
-    }
-    buf += html[i];
-    i++;
-    if (buf.length >= MAX && !inPre) {
-      chunks.push(buf);
-      buf = '';
+    cur += tok;
+    const m = /^<(\/?)(\w+)/.exec(tok);
+    if (m && !tok.endsWith('/>')) {
+      if (m[1] === '/') {
+        const idx = openTags.lastIndexOf(m[2]);
+        if (idx !== -1) openTags.splice(idx, 1);
+      } else {
+        openTags.push(m[2]);
+      }
     }
   }
-  if (buf) {
-    if (inPre) buf += '</code></pre>';
-    chunks.push(buf);
-  }
+  if (cur.trim()) chunks.push(cur);
   return chunks;
 }
-
-module.exports = { escapeHtml, toTelegramHtml, splitHtml, langToExt, parseParts, MAX_INLINE_CODE };

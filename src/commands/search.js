@@ -1,18 +1,13 @@
-const axios = require('axios');
-const searchService = require('../services/searchService');
-const { escapeHtml } = require('../utils/format');
+import { InputFile } from 'grammy';
+import axios from 'axios';
+import { search } from '../services/searchService.js';
+import { escapeHtml } from '../utils/format.js';
 
 const TYPE_LABEL = { song: '🎵 lagu', video: '▶️ video', image: '🖼 gambar' };
 const ALIAS = {
-  lagu: 'song',
-  musik: 'song',
-  song: 'song',
-  music: 'song',
-  video: 'video',
-  yt: 'video',
-  gambar: 'image',
-  foto: 'image',
-  image: 'image',
+  lagu: 'song', musik: 'song', song: 'song', music: 'song',
+  video: 'video', yt: 'video',
+  gambar: 'image', foto: 'image', image: 'image',
 };
 
 // userId -> jenis pencarian yang menunggu query teks
@@ -22,7 +17,7 @@ const pendingQuery = new Map();
 // userId -> hasil lagu terakhir (untuk tombol preview)
 const lastSongs = new Map();
 
-function parseArgs(text) {
+export function parseArgs(text) {
   const arg = text.replace(/^\/search(@\S+)?/, '').trim();
   if (!arg) return { type: '', query: '' };
   const first = arg.split(/\s+/)[0].toLowerCase();
@@ -78,9 +73,9 @@ async function runSearch(ctx, type, query) {
   const wait = await ctx.reply(`🔎 Mencari ${TYPE_LABEL[type]}: "${query}"…`);
   try {
     let items;
-    if (type === 'song') items = await searchService.searchSongs(query);
-    else if (type === 'video') items = await searchService.searchVideos(query);
-    else items = await searchService.searchImages(query);
+    if (type === 'song') items = await search(query, 'music_songs');
+    else if (type === 'video') items = await search(query, 'videos');
+    else items = await searchImages(query);
     ctx.deleteMessage(wait.message_id).catch(() => {});
     if (!items.length) {
       return ctx.reply(`❌ Tidak ada hasil untuk "${escapeHtml(query)}". Coba kata kunci lain.`);
@@ -94,55 +89,57 @@ async function runSearch(ctx, type, query) {
   }
 }
 
-// Unduh preview lalu kirim sebagai file audio utuh agar bisa langsung diputar
-// di chat. Fallback: kirim via URL kalau unduhan gagal.
+// Gambar via DuckDuckGo image API (tanpa key).
+async function searchImages(query) {
+  const res = await axios.get('https://duckduckgo.com/', { params: { q: query }, timeout: 10000 });
+  const vqd = (/vqd=["']?([\w-]+)/.exec(res.data) || [])[1];
+  if (!vqd) throw new Error('Gagal mengambil sesi pencarian gambar.');
+  const r = await axios.get('https://duckduckgo.com/i.js', {
+    params: { l: 'id-id', o: 'json', q: query, vqd },
+    headers: { Referer: 'https://duckduckgo.com/' },
+    timeout: 10000,
+  });
+  return (r.data?.results || []).slice(0, 8).map((it) => ({
+    title: it.title || 'gambar',
+    image: it.image,
+    thumbnail: it.thumbnail,
+    width: it.width,
+    height: it.height,
+    source: it.url,
+  }));
+}
+
+// Unduh preview lalu kirim sebagai file audio utuh agar bisa langsung diputar.
 async function sendPlayableSong(ctx, s) {
-  const caption =
-    `🎵 Contoh lagu: ${s.title} — ${s.artist}` +
-    `${s.link ? `\n🔗 ${s.link}` : ''}`;
+  const caption = `🎵 Contoh lagu: ${s.title} — ${s.uploader || '-'}`;
   try {
     const res = await axios.get(s.previewUrl, {
-      responseType: 'arraybuffer',
-      timeout: 20000,
-      maxContentLength: 15 * 1024 * 1024,
+      responseType: 'arraybuffer', timeout: 20000, maxContentLength: 15 * 1024 * 1024,
     });
     const ext = ((/\.(\w{2,5})(?:\?|$)/.exec(s.previewUrl) || [])[1] || 'mp3').toLowerCase();
     const safeName = s.title.replace(/[^\w\s-]/g, '').trim().slice(0, 60) || 'lagu';
     await ctx.replyWithAudio(
-      { source: Buffer.from(res.data), filename: `${safeName}.${ext}` },
-      { title: s.title, performer: s.artist, caption }
+      new InputFile(Buffer.from(res.data), `${safeName}.${ext}`),
+      { title: s.title, performer: s.uploader, caption }
     );
-  } catch (e) {
-    await ctx.replyWithAudio(s.previewUrl, { title: s.title, performer: s.artist, caption });
+  } catch {
+    await ctx.replyWithAudio(s.previewUrl, { title: s.title, performer: s.uploader, caption });
   }
 }
 
 async function sendSongs(ctx, items) {
-  lastSongs.set(ctx.from.id, items);
-
-  // Kirim 1 contoh file audio yang bisa langsung diputar.
-  const sampleIdx = items.findIndex((s) => s.previewUrl);
-  if (sampleIdx !== -1) {
-    try {
-      await sendPlayableSong(ctx, items[sampleIdx]);
-    } catch (e) {
-      // Gagal mengirim contoh audio tidak boleh menggagalkan daftar hasil.
-    }
+  // Preview via 30s sample kalau tersedia (iTunes), else pakai hasil apa adanya.
+  const previewable = items.find((s) => s.previewUrl);
+  if (previewable) {
+    try { await sendPlayableSong(ctx, previewable); } catch { /* lanjut */ }
   }
-
   const lines = items
-    .map(
-      (s, i) =>
-        `<b>${i === sampleIdx ? '▶️' : `${i + 1}.`} ${escapeHtml(s.title)}</b> — ${escapeHtml(s.artist)}\n` +
-        `💿 ${escapeHtml(s.album || '-')}` +
-        `${s.genre ? ` • 🎼 ${escapeHtml(s.genre)}` : ''}` +
-        `${fmtDur(s.durationSec) ? ` • ⏱ ${fmtDur(s.durationSec)}` : ''}` +
-        `${s.year ? ` • 📅 ${s.year}` : ''}`
-    )
+    .map((s, i) =>
+      `<b>${i + 1}. ${escapeHtml(s.title)}</b>\n📺 ${escapeHtml(s.uploader || '-')}` +
+      `${s.duration ? ` • ⏱ ${fmtDur(s.duration)}` : ''}`)
     .join('\n\n');
   const keyboard = items.map((s, i) => {
-    const row = [{ text: `▶️ Preview ${i + 1}`, callback_data: `srchprev_${i}` }];
-    if (s.link) row.push({ text: '🔗 Buka', url: s.link });
+    const row = [{ text: `▶️ ${i + 1}`, url: s.url }];
     return row;
   });
   await ctx.reply(`<b>🎵 Hasil Lagu</b>\n\n${lines}`, {
@@ -153,19 +150,11 @@ async function sendSongs(ctx, items) {
 
 async function sendVideos(ctx, items) {
   const lines = items
-    .map((v, i) => {
-      const meta = [v.duration ? `⏱ ${v.duration}` : '', v.views ? `👁 ${fmtNum(v.views)}` : '', v.ago ? `🕒 ${escapeHtml(v.ago)}` : '']
-        .filter(Boolean)
-        .join(' • ');
-      return (
-        `<b>${i + 1}. ${escapeHtml(v.title)}</b>\n` +
-        `📺 ${escapeHtml(v.channel || '-')}${meta ? `\n${meta}` : ''}`
-      );
-    })
+    .map((v, i) =>
+      `<b>${i + 1}. ${escapeHtml(v.title)}</b>\n📺 ${escapeHtml(v.uploader || '-')}` +
+      `${v.duration ? ` • ⏱ ${fmtDur(v.duration)}` : ''}`)
     .join('\n\n');
-  const keyboard = items.map((v, i) =>
-    v.link ? [{ text: `▶️ Tonton ${i + 1}`, url: v.link }] : []
-  ).filter((r) => r.length);
+  const keyboard = items.map((v) => [{ text: '▶️ Tonton', url: v.url }]);
   await ctx.reply(`<b>▶️ Hasil Video</b>\n\n${lines}`, {
     parse_mode: 'HTML',
     reply_markup: keyboard.length ? { inline_keyboard: keyboard } : undefined,
@@ -179,30 +168,20 @@ async function sendImages(ctx, items) {
     .map((it, idx) => ({
       type: 'photo',
       media: it.thumbnail || it.image,
-      caption: `<b>${idx + 1}. ${escapeHtml(it.title.slice(0, 80))}</b>${
-        it.width ? `\n📐 ${it.width}×${it.height}px` : ''
-      }`,
+      caption: `<b>${idx + 1}. ${escapeHtml(it.title.slice(0, 80))}</b>${it.width ? `\n📐 ${it.width}×${it.height}px` : ''}`,
     }));
   if (photos.length) {
-    try {
-      await ctx.replyWithMediaGroup(photos, { parse_mode: 'HTML' });
-    } catch (e) {
-      // Thumbnail sering hotlink-blocked; lanjut ke daftar link saja.
-    }
+    try { await ctx.replyWithMediaGroup(photos, { parse_mode: 'HTML' }); } catch { /* hotlink-blocked */ }
   }
   const lines = items
-    .map(
-      (it, i) =>
-        `<b>${i + 1}. ${escapeHtml(it.title)}</b>` +
-        `${it.width ? ` (${it.width}×${it.height}px)` : ''}\n` +
-        `${it.image ? `🖼 ${it.image}\n` : ''}` +
-        `${it.source ? `🔗 ${it.source}` : ''}`
-    )
+    .map((it, i) =>
+      `<b>${i + 1}. ${escapeHtml(it.title)}</b>` +
+      `${it.width ? ` (${it.width}×${it.height}px)` : ''}\n` +
+      `${it.image ? `🖼 ${it.image}\n` : ''}` +
+      `${it.source ? `🔗 ${it.source}` : ''}`)
     .join('\n\n');
   const keyboard = items
-    .map((it, i) =>
-      it.source || it.image ? [{ text: `🔗 Sumber ${i + 1}`, url: it.source || it.image }] : []
-    )
+    .map((it) => (it.source || it.image ? [{ text: '🔗 Sumber', url: it.source || it.image }] : []))
     .filter((r) => r.length);
   await ctx.reply(`<b>🖼 Hasil Gambar</b>\n\n${lines}`, {
     parse_mode: 'HTML',
@@ -223,16 +202,16 @@ async function handleCommand(ctx) {
   return ctx.reply('🔎 Pilih jenis pencarian:', searchKeyboard());
 }
 
-function register(bot) {
+export function register(bot) {
   bot.command('search', handleCommand);
 
-  bot.action('menu_search', (ctx) => {
-    ctx.answerCbQuery();
+  bot.callbackQuery('menu_search', (ctx) => {
+    ctx.answerCallbackQuery();
     ctx.reply('🔎 Pilih jenis pencarian:', searchKeyboard());
   });
 
   const pickType = (type) => (ctx) => {
-    ctx.answerCbQuery();
+    ctx.answerCallbackQuery();
     const q = pendingQuery.get(ctx.from.id);
     if (q) {
       pendingQuery.delete(ctx.from.id);
@@ -241,13 +220,13 @@ function register(bot) {
     pendingType.set(ctx.from.id, type);
     ctx.reply(`Ketik kata kunci untuk mencari ${TYPE_LABEL[type]}:`);
   };
-  bot.action('srch_lagu', pickType('song'));
-  bot.action('srch_video', pickType('video'));
-  bot.action('srch_gambar', pickType('image'));
+  bot.callbackQuery('srch_lagu', pickType('song'));
+  bot.callbackQuery('srch_video', pickType('video'));
+  bot.callbackQuery('srch_gambar', pickType('image'));
 
   // Preview audio lagu dari hasil terakhir.
-  bot.action(/^srchprev_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery();
+  bot.callbackQuery(/^srchprev_(\d+)$/, async (ctx) => {
+    ctx.answerCallbackQuery();
     const items = lastSongs.get(ctx.from.id) || [];
     const s = items[Number(ctx.match[1])];
     if (!s || !s.previewUrl) {
@@ -256,16 +235,16 @@ function register(bot) {
     try {
       await ctx.replyWithAudio(s.previewUrl, {
         title: s.title,
-        performer: s.artist,
-        caption: `▶️ ${s.title} — ${s.artist}`,
+        performer: s.uploader,
+        caption: `▶️ ${s.title} — ${s.uploader || '-'}`,
       });
-    } catch (e) {
+    } catch {
       ctx.reply('❌ Gagal mengirim preview. Coba lagi.');
     }
   });
 
   // Query lewat mode pending: pesan teks berikutnya setelah pilih jenis.
-  bot.on('text', async (ctx, next) => {
+  bot.on('message:text', async (ctx, next) => {
     const text = ctx.message.text;
     if (text.startsWith('/')) return next();
     const type = pendingType.get(ctx.from.id);
@@ -274,5 +253,3 @@ function register(bot) {
     await runSearch(ctx, type, text.trim());
   });
 }
-
-module.exports = { register, parseArgs };

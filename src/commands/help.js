@@ -1,53 +1,35 @@
-const path = require('path');
-const { ADMIN_IDS } = require('../config');
+import path from 'path';
+import { fileURLToPath } from 'node:url';
+import { InputFile } from 'grammy';
+import { config } from '../core/config.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MENU_IMG = path.join(__dirname, '..', '..', 'assets', 'menu.png');
 
-function showHelp(ctx) {
-  const isAdmin = ADMIN_IDS.includes(ctx.from?.id);
+export function showHelp(ctx) {
+  const isAdmin = config.adminIds.includes(ctx.from?.id);
   let text =
-    `📖 *Daftar Perintah*\n\n` +
-    `/start - sambutan & menu\n` +
-    `/help - pesan ini\n` +
-    `/cuaca <kota> - info cuaca real-time\n` +
-    `/reminder <menit> <pesan> - pengingat sekali pakai\n` +
-    `/musik - kirim musik lokal dari folder bot\n` +
-    `/dl <url> - unduh video TikTok / YouTube / Instagram\n` +
-    `/search lagu|video|gambar <kata kunci> - cari musik, video & gambar\n` +
-    `/skills - lihat & pakai skill AI (mis. /plan)\n` +
-    `/reset - hapus histori chat AI & dokumen\n` +
-    `💬 Chat bebas - langsung dijawab AI\n` +
-    `📄 Kirim dokumen teks - AI membacanya & menjawab pertanyaan Anda\n` +
-    `🖼 Kirim foto (+ caption pertanyaan) - AI menganalisis gambarnya\n\n` +
-    `Kirim stiker juga akan saya respons (placeholder).`;
+    '📖 *Daftar Perintah*\n\n' +
+    '/start - sambutan & menu\n' +
+    '/help - pesan ini\n' +
+    '/cuaca <kota> - info cuaca real-time\n' +
+    '/reminder <menit> <pesan> - pengingat sekali pakai\n' +
+    '/musik - kirim musik lokal\n' +
+    '/dl <url> - unduh video TikTok/YouTube/Instagram\n' +
+    '/search lagu|video|gambar <kata kunci>\n' +
+    '/skills - lihat & pakai skill AI\n' +
+    '💬 Chat bebas - dijawab AI\n' +
+    '📄 Kirim dokumen teks - AI baca & jawab\n' +
+    '🖼 Kirim foto (+caption) - AI analisis gambar\n';
   if (isAdmin) {
-    text +=
-      `\n\n*Khusus Admin:*\n` +
-      `/broadcast <pesan> - kirim ke semua user terdaftar\n` +
-      `/stats - lihat jumlah user & reminder aktif`;
+    text += '\n*Khusus Admin:*\n/broadcast <pesan>\n/stats\n/admin - panel admin';
   }
-
   ctx.replyWithPhoto(
-    { source: MENU_IMG },
-    {
-      caption: text,
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '🎵 Local Musik', callback_data: 'menu_musik' }],
-          [{ text: '🔎 Search', callback_data: 'menu_search' }],
-          [{ text: '🌤 Cek Cuaca', callback_data: 'menu_cuaca' }],
-          [{ text: '⬇️ Downloader', callback_data: 'menu_downloader' }],
-          [{ text: '🧠 Skills', callback_data: 'menu_skills' }],
-        ],
-      },
-    }
-  );
+    new InputFile(MENU_IMG),
+    { caption: text, parse_mode: 'Markdown' }
+  ).catch(() => ctx.reply(text, { parse_mode: 'Markdown' }));
 }
 
-function register(bot) {
-  bot.help((ctx) => showHelp(ctx));
+export function register(bot) {
   bot.command('help', (ctx) => showHelp(ctx));
 }
-
-module.exports = { register, showHelp };

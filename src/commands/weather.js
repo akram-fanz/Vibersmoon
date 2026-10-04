@@ -1,18 +1,14 @@
-const weatherService = require('../services/weatherService');
+import { getWeather } from '../services/weatherService.js';
 
-function register(bot) {
+export function register(bot) {
   bot.command('cuaca', async (ctx) => {
-    const city = ctx.message.text.split(' ').slice(1).join(' ').trim();
-    if (!city) {
-      return ctx.reply('Gunakan: /cuaca <nama kota>\nContoh: /cuaca Jakarta');
-    }
+    const city = ctx.message.text.replace(/^\/cuaca\s*/, '').trim();
+    if (!city) return ctx.reply('Gunakan: /cuaca <nama kota>');
     try {
-      const info = await weatherService.getWeather(city);
+      const info = await getWeather(city);
       ctx.replyWithMarkdown(info);
     } catch (e) {
       ctx.reply(`❌ ${e.message}`);
     }
   });
 }
-
-module.exports = { register };

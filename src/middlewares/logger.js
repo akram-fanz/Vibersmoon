@@ -1,21 +1,9 @@
-const db = require('../services/db');
+import { logger as log } from '../core/logger.js';
 
-function logger() {
-  return (ctx, next) => {
-    try {
-      db.incrementMessageCount();
-      if (ctx.from) {
-        db.upsertUser({
-          id: ctx.from.id,
-          username: ctx.from.username || '',
-          firstName: ctx.from.first_name || '',
-        });
-      }
-    } catch (e) {
-      console.error('logger error:', e.message);
-    }
-    return next();
+export function logger() {
+  return async (ctx, next) => {
+    const start = Date.now();
+    await next();
+    log.debug({ userId: ctx.from?.id, ms: Date.now() - start }, 'update handled');
   };
 }
-
-module.exports = { logger };

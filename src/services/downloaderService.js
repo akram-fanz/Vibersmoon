@@ -1,106 +1,158 @@
-const axios = require('axios');
-const config = require('../config');
+import { InputFile } from 'grammy';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import fsp from 'fs/promises';
+import path from 'path';
+import config from '../core/config.js';
+import logger from '../core/logger.js';
 
-const PLATFORM_HOSTS = {
-  tiktok: /(tiktok\.com|vt\.tiktok\.com|tiktokcdn)/i,
-  youtube: /(youtube\.com|youtu\.be|yt\.be)/i,
-  instagram: /(instagram\.com|instagr\.am|ig\.com)/i,
-};
+const YT_RE = /(?:youtube\.com|youtu\.be)/i;
+const IG_RE = /instagram\.com/i;
+const TT_RE = /tiktok\.com/i;
 
-function detectPlatform(url) {
-  if (!url || typeof url !== 'string') return null;
-  for (const [p, re] of Object.entries(PLATFORM_HOSTS)) {
-    if (re.test(url)) return p;
-  }
-  return null;
+export function detectPlatform(url) {
+  if (TT_RE.test(url)) return 'tiktok';
+  if (YT_RE.test(url)) return 'youtube';
+  if (IG_RE.test(url)) return 'instagram';
+  return 'other';
 }
 
-function isDownloadUrl(text) {
-  if (!text) return false;
-  const url = extractUrl(text);
-  return url ? detectPlatform(url) !== null : false;
+export function extractUrl(text) {
+  const m = String(text).match(/https?:\/\/[^\s]+/i);
+  return m ? m[0] : null;
 }
 
-function extractUrl(text) {
-  const m = text.match(/https?:\/\/\S+/i);
-  return m ? m[0].replace(/[)>]/g, '') : null;
+function findYtDlp() {
+  return new Promise((resolve) => {
+    const proc = spawn('which', ['yt-dlp']);
+    let out = '';
+    proc.stdout.on('data', (d) => { out += d; });
+    proc.on('close', () => resolve(out.trim() || null));
+    proc.on('error', () => resolve(null));
+  });
 }
 
-async function getTikTokMedia(url) {
-  const res = await axios.post(
-    'https://www.tikwm.com/api/',
-    new URLSearchParams({ url, count: '12' }).toString(),
-    {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      timeout: 20000,
+function run(cmd, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      reject(new Error('Proses download timeout (maks 10 menit).'));
+    }, opts.timeoutMs || 600_000);
+
+    proc.stdout.on('data', (d) => { stdout += d; });
+    proc.stderr.on('data', (d) => { stderr += d; });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(stderr.slice(-800) || `Exit code ${code}`));
+    });
+    proc.on('error', (err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
+async function probeFormat(url) {
+  const bin = await findYtDlp();
+  if (!bin) throw new Error('yt-dlp tidak ditemukan di server.');
+  const { stdout } = await run(bin, ['-J', '--no-warnings', '--no-playlist', url], { timeoutMs: 120_000 });
+  return JSON.parse(stdout);
+}
+
+export async function getFormats(url) {
+  const info = await probeFormat(url);
+  const formats = (info.formats || [])
+    .filter((f) => f.vcodec !== 'none' && f.ext === 'mp4' && f.height)
+    .sort((a, b) => b.height - a.height);
+  const seen = new Set();
+  const qualities = [];
+  for (const f of formats) {
+    if (!seen.has(f.height)) {
+      seen.add(f.height);
+      qualities.push({ height: f.height, formatId: f.format_id, label: `MP4 ${f.height}p` });
     }
-  );
-  const d = res.data && res.data.data;
-  if (!d || (!d.play && !d.music)) {
-    throw new Error('Tidak bisa mengambil media dari link TikTok tersebut.');
   }
-  if (d.music && !d.play) {
-    return { mediaUrl: d.music, type: 'audio', title: d.title || 'TikTok audio' };
-  }
-  return { mediaUrl: d.play, type: 'video', title: d.title || 'TikTok video' };
+  return {
+    title: info.title || 'video',
+    duration: info.duration || 0,
+    thumbnail: info.thumbnail || null,
+    qualities: qualities.slice(0, 5),
+    audioOnly: (info.formats || []).some((f) => f.vcodec === 'none' && f.acodec !== 'none')
+  };
 }
 
-function findMediaUrl(obj) {
-  if (!obj) return null;
-  const str = JSON.stringify(obj);
-  const extRe = /https?:\/\/[^"'\\\s]+\.(mp4|webm|m4a|mp3|ogg)(?:\?[^"'\\\s]*)?/i;
-  const em = str.match(extRe);
-  if (em) {
-    const u = em[0];
-    const type = /\.(mp3|m4a|ogg)/i.test(u) ? 'audio' : 'video';
-    return { url: u, type };
-  }
-  const keys = ['downloadUrl', 'url', 'videoUrl', 'mp4', 'mediaUrl', 'result', 'hd'];
-  for (const k of keys) {
-    const v = obj[k];
-    if (typeof v === 'string' && v.startsWith('http')) {
-      const type = /\.(mp3|m4a|ogg)/i.test(v) ? 'audio' : 'video';
-      return { url: v, type };
-    }
-  }
-  return null;
+async function downloadMedia(url, args, dir, baseName) {
+  const bin = await findYtDlp();
+  if (!bin) throw new Error('yt-dlp tidak ditemukan di server.');
+  const outTpl = path.join(dir, `${baseName}.%(ext)s`);
+  await run(bin, [...args, '-o', outTpl, '--no-playlist', '--no-warnings', url]);
+  const files = await fsp.readdir(dir);
+  if (!files.length) throw new Error('File hasil download tidak ditemukan.');
+  const file = files[0];
+  const full = path.join(dir, file);
+  const stat = await fsp.stat(full);
+  return { file: full, size: stat.size };
 }
 
-async function getGenericMedia(platform, url) {
-  const ep = platform === 'youtube' ? config.YT_DL_API_URL : config.IG_DL_API_URL;
-  if (!ep) {
-    throw new Error(
-      `Endpoint download ${platform} belum diatur. Isi ${
-        platform === 'youtube' ? 'YT_DL_API_URL' : 'IG_DL_API_URL'
-      } di .env (atau pakai layanan ber-key).`
-    );
-  }
-  let res;
+export async function downloadVideo(url, formatId, dir) {
+  const args = ['-f', formatId || 'bv*+ba/b', '--merge-output-format', 'mp4'];
+  return downloadMedia(url, args, dir, 'video');
+}
+
+export async function downloadAudio(url, dir) {
+  const args = ['-f', 'ba', '-x', '--audio-format', 'mp3', '--audio-quality', '5'];
+  return downloadMedia(url, args, dir, 'audio');
+}
+
+export async function downloadTikTok(url, dir) {
+  // TikTok: coba yt-dlp dulu, fallback ke API tikwm (tanpa watermark)
   try {
-    res = await axios.post(
-      ep,
-      { url },
-      { timeout: 20000, headers: { 'Content-Type': 'application/json' } }
-    );
+    return await downloadMedia(url, [], dir, 'tiktok');
   } catch (e) {
-    throw new Error(`Gagal menghubungi layanan ${platform}: ${e.message}`);
+    logger.info({ err: e.message }, 'yt-dlp TikTok gagal, coba tikwm');
+    const res = await fetch('https://tikwm.com/api/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ url }),
+      signal: AbortSignal.timeout(30_000)
+    });
+    const json = await res.json();
+    const data = json?.data;
+    if (!data) throw new Error('Gagal mengambil data TikTok.');
+    const mediaUrl = data.play || data.wmplay || data.hdplay;
+    if (!mediaUrl) throw new Error('TikTok tidak punya video yang bisa diunduh.');
+    const out = path.join(dir, 'tiktok.mp4');
+    const r2 = await fetch(mediaUrl, { signal: AbortSignal.timeout(120_000) });
+    if (!r2.ok) throw new Error('Gagal mengunduh file TikTok.');
+    const buf = Buffer.from(await r2.arrayBuffer());
+    await fsp.writeFile(out, buf);
+    return { file: out, size: buf.length };
   }
-  const found = findMediaUrl(res.data);
-  if (!found) throw new Error(`Layanan ${platform} tidak mengembalikan URL media.`);
-  return { mediaUrl: found.url, type: found.type, title: 'Media' };
 }
 
-async function getMediaUrl(platform, url) {
-  if (platform === 'tiktok') return getTikTokMedia(url);
-  if (platform === 'youtube') return getGenericMedia('youtube', url);
-  if (platform === 'instagram') return getGenericMedia('instagram', url);
-  throw new Error('Platform tidak didukung.');
+// Fallback API lama (kalau env masih diisi)
+export async function legacyApiDownload(url, platform) {
+  const apiUrl = platform === 'instagram' ? config.igDlApiUrl : config.ytDlApiUrl;
+  if (!apiUrl) return null;
+  try {
+    const res = await axios.get(apiUrl, { params: { url }, timeout: 60000 });
+    const data = res.data;
+    const mediaUrl = data?.url || data?.data?.url || data?.results?.[0]?.url || data?.medias?.[0]?.url;
+    return mediaUrl || null;
+  } catch {
+    return null;
+  }
 }
 
-async function sendMedia(ctx, { mediaUrl, type, title }) {
-  if (type === 'audio') return ctx.replyWithAudio(mediaUrl, { caption: title || '' });
-  if (type === 'video') return ctx.replyWithVideo(mediaUrl, { caption: title || '' });
-  return ctx.replyWithDocument(mediaUrl, { caption: title || '' });
+export function sendMedia(ctx, filePath, caption) {
+  const stat = fs.statSync(filePath);
+  if (stat.size > 49 * 1024 * 1024) {
+    return ctx.reply('❌ File terlalu besar (>50MB) untuk dikirim via Telegram Bot API.');
+  }
+  if (/\.(mp3|m4a|ogg|wav|opus)$/i.test(filePath)) {
+    return ctx.replyWithAudio(new InputFile(filePath), { caption, title: path.basename(filePath) });
+  }
+  return ctx.replyWithVideo(new InputFile(filePath), { caption, supports_streaming: true });
 }
 
-module.exports = { detectPlatform, isDownloadUrl, extractUrl, getMediaUrl, sendMedia };
+// named exports di atas sudah lengkap

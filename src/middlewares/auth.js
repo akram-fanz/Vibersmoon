@@ -1,14 +1,13 @@
-const { ADMIN_IDS } = require('../config');
+import { config } from '../core/config.js';
 
-function isAdmin(ctx) {
-  return ADMIN_IDS.includes(ctx.from?.id);
+export function isAdmin(ctx) {
+  const id = ctx.from?.id;
+  return Boolean(id && config.adminIds.includes(id));
 }
 
-function adminOnly(ctx, next) {
+export async function adminOnly(ctx, next) {
   if (!isAdmin(ctx)) {
     return ctx.reply('⛔ Perintah ini hanya untuk admin.');
   }
   return next();
 }
-
-module.exports = { isAdmin, adminOnly };

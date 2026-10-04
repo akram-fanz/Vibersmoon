@@ -1,6 +1,9 @@
 node_modules/
 .env
-data/db.json
+data/
+tmp/
+*.db-shm
+*.db-wal
 bot.out.log
 bot.err.log
 npm-debug.log*

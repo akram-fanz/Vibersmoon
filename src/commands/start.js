@@ -1,43 +1,24 @@
-const path = require('path');
+import { db } from '../services/db.js';
+import { logger } from '../core/logger.js';
+import { config } from '../core/config.js';
+import { formatMenu } from '../utils/keyboard.js';
 
-const MENU_IMG = path.join(__dirname, '..', '..', 'assets', 'menu.png');
+export function registerStart(bot) {
+  bot.command('start', async (ctx) => {
+    db.touchUser(ctx.from);
+    const text = `Halo ${ctx.from?.first_name || 'Bot'}! 👋
 
-function register(bot) {
-  bot.start((ctx) => {
-    const name = ctx.from.first_name || 'sobat';
-    ctx.replyWithPhoto(
-      { source: MENU_IMG },
-      {
-        caption:
-          `Hai ${name}! 👋\nSaya bot serba bisa. Yang bisa saya lakukan:\n\n` +
-          `/help - lihat semua perintah\n` +
-          `/cuaca <kota> - cek cuaca\n` +
-          `/reminder <menit> <pesan> - pasang pengingat\n` +
-          `/musik - putar musik lokal\n` +
-          `Atau langsung chat saja, saya balas dengan AI.`,
-        reply_markup: {
-          inline_keyboard: [
-          [{ text: '📖 Bantuan', callback_data: 'menu_help' }],
-          [{ text: '🔎 Search', callback_data: 'menu_search' }],
-          [{ text: '🌤 Cek Cuaca', callback_data: 'menu_cuaca' }],
-          [{ text: '🎵 Local Musik', callback_data: 'menu_musik' }],
-          [{ text: '⬇️ Downloader', callback_data: 'menu_downloader' }],
-          [{ text: '🧠 Skills', callback_data: 'menu_skills' }],
-          ],
-        },
-      }
-    );
+Vibersmoon bot aktif. Pilih menu di bawah:
+
+${formatMenu()}`;
+    await ctx.reply(text);
+    db.logJob({ userId: ctx.from.id, type: 'command', detail: { cmd: '/start' }, status: 'success' });
+    logger.info({ userId: ctx.from.id }, '/start');
   });
 
-  bot.action('menu_help', (ctx) => {
-    ctx.answerCbQuery();
-    ctx.reply('Ketik /help untuk daftar lengkap perintah.');
-  });
-
-  bot.action('menu_cuaca', (ctx) => {
-    ctx.answerCbQuery();
-    ctx.reply('Ketik /cuaca <nama kota>, contoh: /cuaca Jakarta');
+  bot.command('ping', async (ctx) => {
+    const t = Date.now();
+    const msg = await ctx.reply('Pong...');
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `Pong: ${Date.now() - t}ms`);
   });
 }
-
-module.exports = { register };

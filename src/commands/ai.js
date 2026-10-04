@@ -1,7 +1,8 @@
-const axios = require('axios');
-const aiService = require('../services/aiService');
-const db = require('../services/db');
-const { toTelegramHtml, splitHtml, escapeHtml, langToExt, parseParts, MAX_INLINE_CODE } = require('../utils/format');
+import axios from 'axios';
+import { chat as aiChat, analyzeImage } from '../services/aiService.js';
+import { getFileLink } from '../utils/telegram.js';
+import * as db from '../services/db.js';
+import { toTelegramHtml, splitHtml, escapeHtml } from '../utils/format.js';
 
 const MAX_DOC_CHARS = 30000;
 const TEXT_EXT = /\.(txt|md|markdown|json|csv|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|cs|php|rb|go|rs|sql|html|css|xml|yaml|yml|log|env|sh|bat|ps1|toml|ini)$/i;
@@ -17,7 +18,7 @@ async function handleDocument(ctx) {
   }
 
   try {
-    const link = await ctx.telegram.getFileLink(doc.file_id);
+    const link = await getFileLink(ctx, doc.file_id);
     const res = await axios.get(link, {
       responseType: 'text',
       timeout: 20000,
@@ -31,7 +32,7 @@ async function handleDocument(ctx) {
     db.setUserDoc(ctx.from.id, name, content);
 
     if (caption) {
-      const reply = await aiService.chat(ctx.from.id, caption, { name, content });
+      const reply = await aiChat(ctx.from.id, caption, { name, content });
       await sendReply(ctx, reply);
       return;
     }
@@ -44,18 +45,24 @@ async function handleDocument(ctx) {
   }
 }
 
-function register(bot) {
+async function sendReply(ctx, reply) {
+  const html = toTelegramHtml(reply);
+  for (const chunk of splitHtml(html)) {
+    await ctx.reply(chunk, { parse_mode: 'HTML' });
+  }
+}
+
+export function registerAi(bot) {
   // Terima dokumen teks lalu jadikan konteks AI.
-  bot.on('document', handleDocument);
+  bot.on('message:document', handleDocument);
 
   // Fallback AI: menangkap semua pesan teks bebas.
   // Didaftarkan PALING TERAKHIR di bot.js agar tidak menelan command spesifik.
-  bot.on('text', async (ctx) => {
+  bot.on('message:text', async (ctx) => {
     const text = ctx.message.text;
-    if (text.startsWith('/')) return; // aman: serahkan ke handler command
+    if (text.startsWith('/')) return;
     try {
-      const doc = db.getUserDoc(ctx.from.id);
-      const reply = await aiService.chat(ctx.from.id, text, doc);
+      const reply = await aiChat(ctx.from.id, text, db.getUserDoc(ctx.from.id));
       await sendReply(ctx, reply);
     } catch (e) {
       ctx.reply(`❌ ${e.message}`);
@@ -63,36 +70,4 @@ function register(bot) {
   });
 }
 
-async function sendReply(ctx, reply) {
-  const parts = parseParts(reply);
-  let html = '';
-
-  const flush = async () => {
-    if (!html.trim()) return;
-    for (const chunk of splitHtml(html)) {
-      await ctx.reply(chunk, { parse_mode: 'HTML' });
-    }
-    html = '';
-  };
-
-  for (const p of parts) {
-    if (p.type === 'text') {
-      html += escapeHtml(p.content);
-      continue;
-    }
-    // p.type === 'code'
-    if (p.content.length > MAX_INLINE_CODE) {
-      await flush(); // kirim dulu teks/code pendek yang terkumpul
-      const ext = langToExt(p.lang);
-      await ctx.replyWithDocument(
-        { source: Buffer.from(p.content), filename: `kode.${ext}` },
-        { caption: `📄 Kode ${p.lang || 'teks'} terlalu panjang, dikirim sebagai file.` }
-      );
-    } else {
-      html += `<pre><code>${escapeHtml(p.content)}</code></pre>`;
-    }
-  }
-  await flush();
-}
-
-module.exports = { register, sendReply };
+export { sendReply };
